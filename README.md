@@ -1,4 +1,4 @@
-# GitHub Actions Workflow Run Data Extractor
+# GitHub Actions Workflow Run Data Analysis
 
 This project allows you to **automatically extract, organize, and store detailed information** about GitHub Actions executions (*workflow runs*) from multiple public repositories. It facilitates the creation of datasets for analysis, pipeline debugging, auditing failed runs, and more.
 
