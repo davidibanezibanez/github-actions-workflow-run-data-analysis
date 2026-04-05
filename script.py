@@ -6,16 +6,24 @@ import base64
 import shutil
 import time
 import csv
+import logging
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
-# Configuración global
+# Logging configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+# Global configuration
 
 load_dotenv()
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
 if not GITHUB_TOKEN:
-    raise EnvironmentError("GITHUB_TOKEN no encontrado. Asegúrate de tener un archivo .env con la variable.")
+    raise EnvironmentError("GITHUB_TOKEN not found. Make sure you have a .env file with the variable defined.")
 
 MAX_RUNS = 100
 REPOS_CSV = "repos.csv"
@@ -25,7 +33,7 @@ HEADERS = {
     "Accept": "application/vnd.github+json"
 }
 
-# Funciones Utilitarias
+# Utility functions
 
 def read_repositories(csv_path):
     repos = []
@@ -64,9 +72,9 @@ def save_logs_zip(run_id, output_path, base_api_url):
                 f.write(resp.content)
             return True
         else:
-            print(f"No se pudieron descargar los logs para run {run_id}. Código: {resp.status_code}")
+            logger.error(f"Could not download logs for run {run_id}. Status code: {resp.status_code}")
     except requests.exceptions.RequestException as e:
-        print(f"Error al descargar logs para run {run_id}: {e}")
+        logger.error(f"Error downloading logs for run {run_id}: {e}")
     return False
 
 def get_file_content(owner, repo, path, ref=None):
@@ -79,7 +87,7 @@ def get_file_content(owner, repo, path, ref=None):
             if data.get("encoding") == "base64":
                 return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
     except requests.exceptions.RequestException as e:
-        print(f"Error obteniendo archivo YAML {path}: {e}")
+        logger.error(f"Error fetching YAML file {path}: {e}")
     return None
 
 def get_workflow_runs(base_api_url, max_runs=None):
@@ -91,7 +99,7 @@ def get_workflow_runs(base_api_url, max_runs=None):
         try:
             resp = requests.get(url, headers=HEADERS, params=params, timeout=30)
             if resp.status_code != 200:
-                print(f"Error en página {page}. Código: {resp.status_code}")
+                logger.error(f"Error on page {page}. Status code: {resp.status_code}")
                 break
             data = resp.json().get("workflow_runs", [])
             if not data:
@@ -101,7 +109,7 @@ def get_workflow_runs(base_api_url, max_runs=None):
                 break
             page += 1
         except requests.exceptions.RequestException as e:
-            print(f"Error obteniendo workflow runs: {e}")
+            logger.error(f"Error fetching workflow runs: {e}")
             break
     return runs[:max_runs] if max_runs else runs
 
@@ -112,9 +120,9 @@ def get_jobs_json(base_api_url, run_id):
         if resp.status_code == 200:
             return resp.json()
         else:
-            print(f"No se pudo obtener jobs para run {run_id}. Código: {resp.status_code}")
+            logger.error(f"Could not fetch jobs for run {run_id}. Status code: {resp.status_code}")
     except requests.exceptions.RequestException as e:
-        print(f"Error al obtener jobs para run {run_id}: {e}")
+        logger.error(f"Error fetching jobs for run {run_id}: {e}")
     return None
 
 def get_run_detail(base_api_url, run_id):
@@ -124,32 +132,32 @@ def get_run_detail(base_api_url, run_id):
         if resp.status_code == 200:
             return resp.json()
         else:
-            print(f"No se pudo obtener detalle del run {run_id}. Código: {resp.status_code}")
+            logger.error(f"Could not fetch run details for run {run_id}. Status code: {resp.status_code}")
     except requests.exceptions.RequestException as e:
-        print(f"Error al obtener detalle de run {run_id}: {e}")
+        logger.error(f"Error fetching run details for run {run_id}: {e}")
     return None
 
-# Ejecución principal
+# Main execution
 
 if not GITHUB_TOKEN:
-    raise EnvironmentError("La variable de entorno GITHUB_TOKEN no está definida.")
+    raise EnvironmentError("Environment variable GITHUB_TOKEN is not defined.")
 
 repositories = read_repositories(REPOS_CSV)
 
-for OWNER, REPO in repositories:
-    print(f"\n==> Procesando repositorio: {OWNER}/{REPO}")
-    BASE_API_URL = f"https://api.github.com/repos/{OWNER}/{REPO}"
-    OUTPUT_DIR = Path(f"{OWNER}_{REPO}")
-    ALL_DIR = OUTPUT_DIR / "all_workflow_runs"
-    FAILURE_DIR = OUTPUT_DIR / "failure_workflow_runs"
-    RETRY_DIR = OUTPUT_DIR / "retry_workflow_runs"
+for owner, repo in repositories:
+    logger.info(f"==> Processing repository: {owner}/{repo}")
+    base_api_url = f"https://api.github.com/repos/{owner}/{repo}"
+    output_dir = Path(f"{owner}_{repo}")
+    all_dir = output_dir / "all_workflow_runs"
+    failure_dir = output_dir / "failure_workflow_runs"
+    retry_dir = output_dir / "retry_workflow_runs"
 
-    ALL_DIR.mkdir(parents=True, exist_ok=True)
-    FAILURE_DIR.mkdir(parents=True, exist_ok=True)
-    RETRY_DIR.mkdir(parents=True, exist_ok=True)
+    all_dir.mkdir(parents=True, exist_ok=True)
+    failure_dir.mkdir(parents=True, exist_ok=True)
+    retry_dir.mkdir(parents=True, exist_ok=True)
 
-    workflow_runs = get_workflow_runs(BASE_API_URL, max_runs=MAX_RUNS)
-    print(f"{len(workflow_runs)} workflow runs encontrados.")
+    workflow_runs = get_workflow_runs(base_api_url, max_runs=MAX_RUNS)
+    logger.info(f"{len(workflow_runs)} workflow runs found.")
 
     for run in workflow_runs:
         run_id = run["id"]
@@ -157,39 +165,43 @@ for OWNER, REPO in repositories:
         run_attempt = run.get("run_attempt", 1)
         run_conclusion = run.get("conclusion", "")
 
-        print(f"\nProcesando run {run_id} - {run_name} (attempt: {run_attempt}, conclusion: {run_conclusion})")
+        logger.info(
+            f"Processing run {run_id} - {run_name} "
+            f"(attempt: {run_attempt}, conclusion: {run_conclusion})"
+        )
 
-        run_detail = get_run_detail(BASE_API_URL, run_id)
-        jobs_data = get_jobs_json(BASE_API_URL, run_id)
+        run_detail = get_run_detail(base_api_url, run_id)
+        jobs_data = get_jobs_json(base_api_url, run_id)
 
         if not run_detail or not jobs_data:
-            print("Run omitido por error en metadata.")
+            logger.error("Run skipped due to metadata error.")
             continue
 
         workflow_path = run_detail.get("path")
         head_sha = run_detail.get("head_sha")
-        yaml_content = get_file_content(OWNER, REPO, workflow_path, head_sha) if workflow_path else None
+        yaml_content = get_file_content(owner, repo, workflow_path, head_sha) if workflow_path else None
         yaml_filename = os.path.basename(workflow_path) if workflow_path else None
 
-        all_dir = create_run_dir(ALL_DIR, run_id, run_name)
-        save_json(run_detail, all_dir / "workflow_run.json")
-        save_json(jobs_data, all_dir / "jobs.json")
-        if yaml_content and yaml_filename:
-            save_text(yaml_content, all_dir / yaml_filename)
+        run_all_dir = create_run_dir(all_dir, run_id, run_name)
+        save_json(run_detail, run_all_dir / "workflow_run.json")
+        save_json(jobs_data, run_all_dir / "jobs.json")
 
-        logs_zip_path = all_dir / "logs.zip"
-        if not save_logs_zip(run_id, logs_zip_path, BASE_API_URL):
-            print("No se guardaron logs.zip, run omitido en copias adicionales.")
+        if yaml_content and yaml_filename:
+            save_text(yaml_content, run_all_dir / yaml_filename)
+
+        logs_zip_path = run_all_dir / "logs.zip"
+        if not save_logs_zip(run_id, logs_zip_path, base_api_url):
+            logger.error("logs.zip not saved, run skipped for additional copies.")
             continue
 
         if run_conclusion == "failure":
-            failure_dir = create_run_dir(FAILURE_DIR, run_id, run_name)
-            shutil.copytree(all_dir, failure_dir, dirs_exist_ok=True)
+            run_failure_dir = create_run_dir(failure_dir, run_id, run_name)
+            shutil.copytree(run_all_dir, run_failure_dir, dirs_exist_ok=True)
 
         if run_attempt > 1:
-            retry_dir = create_run_dir(RETRY_DIR, run_id, run_name)
-            shutil.copytree(all_dir, retry_dir, dirs_exist_ok=True)
+            run_retry_dir = create_run_dir(retry_dir, run_id, run_name)
+            shutil.copytree(run_all_dir, run_retry_dir, dirs_exist_ok=True)
 
         time.sleep(1)
 
-print("\nExtracción completada para todos los repositorios.")
+logger.info("Extraction completed for all repositories.")
